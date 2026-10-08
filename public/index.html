@@ -162,7 +162,7 @@ input{font:600 1.1rem var(--body);color:var(--ink);background:#fff;border:3px so
   <div class="menu-col">
     <h1 class="logo"><span>Wobble</span><span>Rumble</span></h1>
     <div style="display:grid;gap:14px">
-      <p class="tag">Up to 20 players, 4 rounds, one crown. Before every round, everyone votes on the course.</p>
+      <p class="tag">2 to 10 players, one crown. Before every round, everyone votes on the course.</p>
       <div class="panel menu-panel">
         <div class="field"><label for="nameIn">Name your blob</label><input id="nameIn" maxlength="12" autocomplete="off" placeholder="Your name"></div>
         <div class="field"><span class="lbl" id="swl">Colour</span><div id="swatches" class="swatches" role="radiogroup" aria-labelledby="swl"></div></div>
@@ -180,7 +180,7 @@ input{font:600 1.1rem var(--body);color:var(--ink);background:#fff;border:3px so
 <aside id="lobbyP" class="panel" hidden>
   <p class="eyebrow" id="roomKind">Private room</p>
   <div class="codebox"><span class="code" id="roomCode">----</span><button id="copyBtn" class="btn sm ghost">Copy invite link</button></div>
-  <p class="lobbynote" id="lobbyNote">Share the code so friends can join. Empty spots are filled with bots.</p>
+  <p class="lobbynote" id="lobbyNote">Share the code so friends can join.</p>
   <ul class="plist" id="plist"></ul>
   <button id="startShowBtn" class="btn">Start the show</button>
   <p class="lobbynote" id="waitNote" hidden></p>
@@ -680,11 +680,11 @@ function renderLobby(){
  $('roomCode').textContent=ROOM.code;$('roomKind').textContent=ROOM.pub?'Public room':'Private room';
  const hs=members();
  $('plist').innerHTML=hs.map(e=>`<li><i style="background:${e.color}"></i><span>${esc(e.name)}</span>${e.id===ROOM.hostId?'<small>host</small>':''}${e.id===myId?'<small>you</small>':''}</li>`).join('');
- const bots=Math.max(0,20-hs.length);
- $('lobbyNote').textContent=`${hs.length} player${hs.length===1?'':'s'} here. ${bots?bots+' bots will fill the empty spots.':'The show is full.'}`;
- $('startShowBtn').hidden=!isHost;
+ const enough=hs.length>=2;
+ $('lobbyNote').textContent=`${hs.length} of 10 players here.`+(enough?'':' You need at least 2 to start, so share the code.');
+ $('startShowBtn').hidden=!isHost;$('startShowBtn').disabled=!enough;
  const w=$('waitNote');
- if(ROOM.autoAt){w.hidden=false;}else{w.hidden=isHost;w.textContent='Waiting for the host to start the show.';}
+ if(ROOM.autoAt){w.hidden=false;}else if(!enough){w.hidden=true;}else{w.hidden=isHost;w.textContent='Waiting for the host to start the show.';}
 }
 function tickLobby(){if(PH.phase!=='lobby'||!ROOM||!ROOM.autoAt)return;const s=Math.max(0,Math.ceil((ROOM.autoAt-serverNow())/1000));$('waitNote').textContent=`The show starts automatically in ${s}s.`;}
 
@@ -704,10 +704,10 @@ const modeClass=def=>def.final?'final':def.mode;
 function goalText(def,n){if(def.final)return def.mode==='race'?'First to touch the crown wins':'Last blob standing wins';
  return({race:`First ${n} across the line qualify`,survival:`Survive until only ${n} remain`,collect:`Top ${n} coin holders qualify`})[def.mode];}
 function buildVote(d){
- const final=d.round>=d.rounds-1;
- $('voteRound').textContent=final?'Final round':`Round ${d.round+1} of ${d.rounds}`;
+ const final=!!d.final;
+ $('voteRound').textContent=final?'Final round':`Round ${d.round+1}`;
  $('voteTitle').textContent=final?'Vote for the final':'Vote for the next course';
- $('voteSub').textContent=final?`${d.left} finalists · one crown`:`${d.left} blobs left · ${d.target} go through`;
+ $('voteSub').textContent=final?`${d.left} finalists · one crown`:`${d.left} players left · ${d.target} go through`;
  $('voteNote').textContent=me&&me.inShow?'Tap a course to vote. Most votes wins; a tie is settled by spin.':'You are watching this show, but your vote still counts.';
  const cards=$('cards');cards.innerHTML='';cards.className='cards'+(d.opts.length===2?' two':'');
  VOTE={opts:d.opts.map((id,i)=>{const def=MAPS[id];const b=document.createElement('button');b.className='card';
@@ -729,7 +729,7 @@ function startRoundClient(d){
  const def=MAPS[d.map];if(!def)return;
  RNG=mulberry32(d.seed);newWorld();W.mode=def.mode;def.build();
  const sp=sshuffle(W.spawns.slice());RNG=Math.random;
- R={map:d.map,def,target:d.target,startAt:d.startAt,dur:d.dur,round:d.round,rounds:d.rounds,finished:[],out:new Set(),winner:null,over:false,ui:'',lastC:-1,crownSent:false};
+ R={map:d.map,def,target:d.target,startAt:d.startAt,dur:d.dur,round:d.round,finished:[],out:new Set(),winner:null,over:false,ui:'',lastC:-1,crownSent:false};
  W.round=R;
  const list=d.actors.map(id=>ents.get(id)).filter(Boolean);
  setActors(list);
@@ -773,7 +773,7 @@ function tickRound(){
 function showResults(d){
  const q=d.qualified,act=d.actors;const def=MAPS[d.map];
  const wasIn=act.includes(myId),youIn=q.includes(myId);
- $('resRound').textContent=`Round ${d.round+1} of ${d.rounds} · ${def?def.name:''}`;
+ $('resRound').textContent=`Round ${d.round+1} · ${def?def.name:''}`;
  const t=$('resTitle');t.textContent=!wasIn?'Round complete':youIn?'Qualified!':'Eliminated';t.classList.toggle('out',wasIn&&!youIn);
  const myCoins=d.coins&&d.coins[myId]||0;
  $('resSub').textContent=`${q.length} go through · ${act.length-q.length} knocked out`+(def&&def.mode==='collect'&&wasIn?` · you grabbed ${myCoins} coin${myCoins===1?'':'s'}`:'')+(wasIn&&!youIn?' · you can keep watching and voting':'');
@@ -789,7 +789,7 @@ function showCrowned(d){
  SHOWWIN=w;
  $('crTitle').textContent=w&&w.isMe?'You won the crown!':'Crowned';
  $('crName').textContent=w?w.name:'Nobody';
- $('crSub').textContent=w?(w.isMe?'Four rounds, one wobbly champion. Nicely done.':(w.bot?`${w.name} the bot outlasted everyone.`:`${w.name} outlasted everyone.`)):'Everyone fell. It happens.';
+ $('crSub').textContent=w?(w.isMe?'Last blob wobbling. Nicely done.':`${w.name} outlasted everyone.`):'Everyone fell. It happens.';
  $('crowned').hidden=false;burst(new V3(0,3,0),40);if(w&&w.isMe)sfx.win();
 }
 let SHOWSPEC=0,SHOWWIN=null,DEMO=[];

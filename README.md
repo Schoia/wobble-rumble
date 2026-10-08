@@ -1,6 +1,6 @@
 # Wobble Rumble
 
-An online multiplayer party elimination game for up to 20 players. Each show has 4 rounds; before every round, everyone in the room votes on the course. Empty spots are filled with bots, and the last round crowns a single winner.
+An online multiplayer party elimination game for 2 to 10 players. Before every round, everyone in the room votes on the course, and the last round crowns a single winner.
 
 ## Play
 
@@ -24,7 +24,7 @@ An online multiplayer party elimination game for up to 20 players. Each show has
 | Crown Peak | Final | First to touch the crown wins |
 | Last Tile | Final | Last blob standing wins |
 
-The show cuts 20 players to 14, 10, 6 and then 1.
+Each round knocks out about a third of the players; once 3 or fewer remain, the final decides the winner (10 players: 10 → 7 → 5 → 3 → final; 2 or 3 players go straight to the final).
 
 ## Run it locally
 
@@ -51,4 +51,4 @@ Render gives you a URL like `https://wobble-rumble.onrender.com`. Free services 
 ## How it works
 
 - `server.js` serves the page and runs rooms over WebSockets. It decides the show: votes, which course is played, who finished or fell, coin counts, and who qualifies.
-- `public/index.html` is the whole game (three.js r128). Each browser simulates its own blob and sends its position 20 times a second; the room host's browser also drives the bots. If the host leaves, the next player takes over the bots.
+- `public/index.html` is the whole game (three.js r128). Each browser simulates its own blob and sends its position 20 times a second.

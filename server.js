@@ -1,7 +1,7 @@
 'use strict';
 // Wobble Rumble multiplayer server: serves the game page and runs rooms over WebSockets.
 // The server decides the show (votes, rounds, who qualifies). Each player's browser
-// simulates its own blob; the room host's browser also simulates the bots.
+// simulates its own blob. Rooms hold 2 to 10 players; there are no bots.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -9,7 +9,8 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const INDEX = path.join(__dirname, 'public', 'index.html');
-const MAX = 20;
+const MAX = 10;
+const MIN = 2;
 
 const MAPS = {
   spinner: { mode: 'race' }, bumper: { mode: 'race' }, gates: { mode: 'race' },
@@ -19,8 +20,6 @@ const MAPS = {
 const REG = ['spinner', 'bumper', 'gates', 'tiles', 'sweeper', 'coins'];
 const FIN = ['crown', 'lasttile'];
 const HUMAN_COLORS = ['#ff4f87', '#ffcb2f', '#22d39b', '#4fb3ff', '#ff8a3d', '#a66bff', '#7be04f', '#3fe0e0'];
-const BOT_COLORS = ['#ff4f87', '#ffcb2f', '#22d39b', '#4fb3ff', '#ff8a3d', '#a66bff', '#ff6bd6', '#7be04f', '#3fe0e0', '#ff5b5b', '#ffd86b', '#6c7bff', '#f8a1c4', '#9be7c4', '#ffb36b', '#c38bff', '#5ec2a8', '#ff9fb0', '#8ad1ff', '#e8e05a'];
-const BOT_NAMES = ['Mochi', 'Pudding', 'Noodle', 'Wiggles', 'Dumpling', 'Gumdrop', 'Bao', 'Jellybean', 'Pickle', 'Sprout', 'Taffy', 'Biscuit', 'Squish', 'Waffle', 'Nugget', 'Boba', 'Marbles', 'Tofu', 'Sundae', 'Pebble', 'Zest', 'Fizz', 'Doodle', 'Kiwi'];
 const CROWN = [0, 8.1, -65];
 
 const server = http.createServer((req, res) => {
@@ -73,58 +72,44 @@ const sanitize = a => a.slice(0, 8).map(v => (typeof v === 'number' && isFinite(
 function checkAuto(r) {
   if (!r.pub || phase(r) !== 'lobby') { r.autoAt = 0; return; }
   const n = r.members.size;
-  if (n >= 2 && !r.autoAt) {
+  if (n >= MIN && !r.autoAt) {
     r.autoAt = Date.now() + 30000; const at = r.autoAt;
     later(r, 30000, () => { if (r.autoAt === at && phase(r) === 'lobby') startShow(r); });
     bcast(r, roster(r));
-  } else if (n < 2 && r.autoAt) { r.autoAt = 0; bcast(r, roster(r)); }
+  } else if (n < MIN && r.autoAt) { r.autoAt = 0; bcast(r, roster(r)); }
 }
 
 function startShow(r) {
-  const humans = [...r.members.values()];
-  const taken = new Set(humans.map(h => h.name.toLowerCase()));
-  const names = shuffle(BOT_NAMES.filter(n => !taken.has(n.toLowerCase())));
+  if (r.members.size < MIN) return;
   r.bots = [];
-  for (let i = 0; i < Math.max(0, MAX - humans.length); i++) r.bots.push({ id: 'b' + (nextId++), name: names[i % names.length], color: BOT_COLORS[(i * 7) % BOT_COLORS.length] });
-  r.show = { round: 0, rounds: 4, played: new Set(), inShow: new Set(humans.map(h => h.id).concat(r.bots.map(b => b.id))) };
+  r.show = { round: 0, played: new Set(), inShow: new Set(r.members.keys()) };
   r.autoAt = 0;
   bcast(r, roster(r));
   gotoVote(r);
 }
+// The final is played once 3 or fewer remain; before that each round knocks out about a third.
+const isFinal = r => r.show.inShow.size <= 3 || r.show.played.size >= REG.length;
 function target(r) {
   const n = r.show.inShow.size;
-  if (r.show.round >= r.show.rounds - 1) return 1;
-  return Math.max(2, Math.min(n - 1, Math.ceil(n * [0.7, 0.65, 0.6][r.show.round])));
+  if (isFinal(r)) return 1;
+  return Math.max(2, n - Math.max(1, Math.round(n * 0.3)));
 }
 function tally(r) { const v = r.vote; return v.opts.map((_, i) => [...v.votes].filter(([, x]) => x === i).map(([id]) => id)); }
 function pushVotes(r) { const t = tally(r); r.phaseData.tally = t; bcast(r, { t: 'votes', tally: t }); }
 function gotoVote(r) {
   const ids = [...r.show.inShow];
   if (ids.length <= 1) { crowned(r, ids[0] || null); return; }
-  const final = r.show.round >= r.show.rounds - 1;
+  const final = isFinal(r);
   const opts = final ? FIN.slice() : shuffle(REG.filter(id => !r.show.played.has(id))).slice(0, 3);
-  const v = { opts, votes: new Map(), botsLeft: 0, revealed: false };
+  const v = { opts, votes: new Map(), revealed: false };
   r.vote = v;
-  const bots = r.bots.filter(b => r.show.inShow.has(b.id));
-  v.botsLeft = bots.length;
-  for (const b of bots) {
-    const pref = opts.map(() => Math.random());
-    later(r, 900 + Math.random() * 6000, () => {
-      if (r.vote !== v || v.revealed) return;
-      const counts = opts.map((_, i) => [...v.votes.values()].filter(x => x === i).length);
-      const w = pref.map((p, i) => p + counts[i] * 0.06);
-      let i = w.indexOf(Math.max(...w));
-      if (Math.random() < 0.25) i = Math.floor(Math.random() * opts.length);
-      v.votes.set(b.id, i); v.botsLeft--; pushVotes(r); maybeEndVote(r);
-    });
-  }
   const endsAt = Date.now() + 10000;
-  setPhase(r, { phase: 'vote', opts, round: r.show.round, rounds: r.show.rounds, target: target(r), left: ids.length, endsAt, tally: opts.map(() => []) }, true);
+  setPhase(r, { phase: 'vote', opts, round: r.show.round, final, target: target(r), left: ids.length, endsAt, tally: opts.map(() => []) }, true);
   later(r, 10000, () => { if (r.vote === v) reveal(r); });
 }
 function maybeEndVote(r) {
   const v = r.vote; if (!v || v.revealed || v.ending) return;
-  if (v.botsLeft <= 0 && [...r.members.keys()].every(id => v.votes.has(id))) { v.ending = true; later(r, 1200, () => { if (r.vote === v) reveal(r); }); }
+  if ([...r.members.keys()].every(id => v.votes.has(id))) { v.ending = true; later(r, 1200, () => { if (r.vote === v) reveal(r); }); }
 }
 function reveal(r) {
   const v = r.vote; if (!v || v.revealed) return; v.revealed = true;
@@ -147,10 +132,10 @@ function startRound(r, mapId) {
   const actors = [...r.show.inShow];
   const now = Date.now(), startAt = now + 6000;
   const dur = def.mode === 'race' ? (def.final ? 150 : 120) : def.mode === 'survival' ? (def.final ? 0 : 70) : 45;
-  const R = { map: mapId, mode: def.mode, final: !!def.final, actors, target: target(r), startAt, dur, seed: Math.floor(Math.random() * 1e9), finished: [], out: [], winner: null, coins: {}, coinArr: null, tiles: new Set(), doors: new Set(), log: [], over: false };
-  if (def.mode === 'collect') { R.coinArr = []; for (let i = 0; i < 14; i++) R.coinArr.push(Object.assign({ active: true }, coinPos(R.coinArr))); }
+  const R = { map: mapId, mode: def.mode, final: !!def.final, round: r.show.round, actors, target: target(r), startAt, dur, seed: Math.floor(Math.random() * 1e9), finished: [], out: [], winner: null, coins: {}, coinArr: null, tiles: new Set(), doors: new Set(), log: [], over: false };
+  if (def.mode === 'collect') { R.coinArr = []; for (let i = 0; i < 10; i++) R.coinArr.push(Object.assign({ active: true }, coinPos(R.coinArr))); }
   r.R = R;
-  setPhase(r, { phase: 'round', map: mapId, seed: R.seed, actors, target: R.target, startAt, dur, round: r.show.round, rounds: r.show.rounds,
+  setPhase(r, { phase: 'round', map: mapId, seed: R.seed, actors, target: R.target, startAt, dur, round: r.show.round, final: !!def.final,
     coins: R.coinArr ? R.coinArr.map(c => [c.x, c.z, 1]) : null, log: R.log }, true);
   if (dur) later(r, startAt - now + dur * 1000, () => { if (r.R === R) endRound(r); });
 }
@@ -230,7 +215,7 @@ function results(r, R) {
   bcast(r, roster(r));
   if (R.final || q.length <= 1) { crowned(r, q[0] || null); return; }
   const next = Date.now() + 8000;
-  setPhase(r, { phase: 'results', map: R.map, round: r.show.round, rounds: r.show.rounds, qualified: q, actors: R.actors, coins: R.coins, next }, false);
+  setPhase(r, { phase: 'results', map: R.map, round: r.show.round, qualified: q, actors: R.actors, coins: R.coins, next }, false);
   later(r, 8000, () => { if (!r.show) return; r.show.round++; gotoVote(r); });
 }
 function crowned(r, winner) {
@@ -253,7 +238,7 @@ function join(ws, m) {
   else if (m.mode === 'code') {
     r = rooms.get(String(m.code || '').toUpperCase().replace(/[^A-Z]/g, ''));
     if (!r) { send(ws, { t: 'err', msg: 'No room with that code. Check the letters and try again.' }); return null; }
-    if (r.members.size >= MAX) { send(ws, { t: 'err', msg: 'That room is full (20 players).' }); return null; }
+    if (r.members.size >= MAX) { send(ws, { t: 'err', msg: 'That room is full (10 players).' }); return null; }
   } else {
     const pubs = [...rooms.values()].filter(x => x.pub && x.members.size < MAX);
     r = pubs.find(x => phase(x) === 'lobby') || pubs[0] || createRoom(true);
